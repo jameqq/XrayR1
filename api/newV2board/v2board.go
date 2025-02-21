@@ -413,7 +413,7 @@ func (c *APIClient) parseV2rayNodeResponse(s *serverConfig) (*api.NodeInfo, erro
 				header = httpHeader
 			}
 		}
-	case "httpupgrade", "splithttp":
+	case "httpupgrade", "splithttp", "xhttp":
 		if s.NetworkSettings.Headers != nil {
 			if httpHeaders, err := s.NetworkSettings.Headers.MarshalJSON(); err != nil {
 				return nil, err
