@@ -1512,6 +1512,8 @@ github.com/sacloud/packages-go v0.0.10 h1:UiQGjy8LretewkRhsuna1TBM9Vz/l9FoYpQx+D
 github.com/sacloud/packages-go v0.0.10/go.mod h1:f8QITBh9z4IZc4yE9j21Q8b0sXEMwRlRmhhjWeDVTYs=
 github.com/sagernet/sing v0.5.0 h1:soo2wVwLcieKWWKIksFNK6CCAojUgAppqQVwyRYGkEM=
 github.com/sagernet/sing v0.5.0/go.mod h1:ARkL0gM13/Iv5VCZmci/NuoOlePoIsW0m7BWfln/Hak=
+github.com/sagernet/sing v0.5.1 h1:mhL/MZVq0TjuvHcpYcFtmSD1BFOxZ/+8ofbNZcg1k1Y=
+github.com/sagernet/sing v0.5.1/go.mod h1:ARkL0gM13/Iv5VCZmci/NuoOlePoIsW0m7BWfln/Hak=
 github.com/sagernet/sing-shadowsocks v0.2.7 h1:zaopR1tbHEw5Nk6FAkM05wCslV6ahVegEZaKMv9ipx8=
 github.com/sagernet/sing-shadowsocks v0.2.7/go.mod h1:0rIKJZBR65Qi0zwdKezt4s57y/Tl1ofkaq6NlkzVuyE=
 github.com/sagikazarmark/crypt v0.10.0/go.mod h1:gwTNHQVoOS3xp9Xvz5LLR+1AauC5M6880z5NWzdhOyQ=
@@ -1674,6 +1676,8 @@ github.com/xtls/reality v0.0.0-20240712055506-48f0b2d5ed6d h1:+B97uD9uHLgAAulhig
 github.com/xtls/reality v0.0.0-20240712055506-48f0b2d5ed6d/go.mod h1:dm4y/1QwzjGaK17ofi0Vs6NpKAHegZky8qk6J2JJZAE=
 github.com/xtls/xray-core v1.8.25-0.20241111042233-0df2446f824d h1:00+ceMqRs5YdBMm4NLdsupYnxkP5Ghka9Lzw2ciVhgk=
 github.com/xtls/xray-core v1.8.25-0.20241111042233-0df2446f824d/go.mod h1:n8wJBW828YcDQ+9+BnAtbofXVt31VMvz4TwbZK0BaEE=
+github.com/xtls/xray-core v1.8.25-0.20241121054707-513f18bf531e h1:J5sTv0Sw+BonaI+rBh4Jkw9BfBqDjfAts81/HbIaqNg=
+github.com/xtls/xray-core v1.8.25-0.20241121054707-513f18bf531e/go.mod h1:wByClH1yrH8I611sREjG62gxbP5hFtdAWYJfydQF/zI=
 github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0 h1:6fRhSjgLCkTD3JnJxvaJ4Sj+TYblw757bqYgZaOq5ZY=
 github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0/go.mod h1:/LWChgwKmvncFJFHJ7Gvn9wZArjbV5/FppcK2fKk/tI=
 github.com/yandex-cloud/go-genproto v0.0.0-20240311082839-58e1a7554a75 h1:hkFRBcSOFUNuuORzA5DqvBcoFjH7R0HCIu+mlSSw56U=
@@ -2487,6 +2491,8 @@ google.golang.org/protobuf v1.29.1/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqw
 google.golang.org/protobuf v1.30.0/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
 google.golang.org/protobuf v1.35.1 h1:m3LfL6/Ca+fqnjnlqQXNpFPABW1UD7mjh8KO2mKFytA=
 google.golang.org/protobuf v1.35.1/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
+google.golang.org/protobuf v1.35.2 h1:8Ar7bF+apOIoThw1EdZl0p1oWvMqTHmpA2fRTyZO8io=
+google.golang.org/protobuf v1.35.2/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
 gopkg.in/alecthomas/kingpin.v2 v2.2.6/go.mod h1:FMv+mEhP44yOT+4EoQTLFTRgOQ1FBLkstjWtayDeSgw=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=

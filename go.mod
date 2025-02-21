@@ -16,18 +16,18 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/r3labs/diff/v2 v2.15.1
 	github.com/redis/go-redis/v9 v9.7.0
-	github.com/sagernet/sing v0.5.0
+	github.com/sagernet/sing v0.5.1
 	github.com/sagernet/sing-shadowsocks v0.2.7
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.9.0
-	github.com/xtls/xray-core v1.8.25-0.20241111042233-0df2446f824d
+	github.com/xtls/xray-core v1.8.25-0.20241121054707-513f18bf531e
 	golang.org/x/crypto v0.29.0
 	golang.org/x/net v0.31.0
 	golang.org/x/time v0.7.0
-	google.golang.org/protobuf v1.35.1
+	google.golang.org/protobuf v1.35.2
 )
 
 require (
