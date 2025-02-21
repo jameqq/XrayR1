@@ -1672,8 +1672,8 @@ github.com/xtls/quic-go v0.0.0-20241220091641-6f5777d1c087 h1:kKPg/cJPSKnE50VXVB
 github.com/xtls/quic-go v0.0.0-20241220091641-6f5777d1c087/go.mod h1:mN9lAuc8Vt7eHvnQkDIH5+uHh+DcLmTBma9rLqk/rPY=
 github.com/xtls/reality v0.0.0-20240712055506-48f0b2d5ed6d h1:+B97uD9uHLgAAulhigmys4BVwZZypzK7gPN3WtpgRJg=
 github.com/xtls/reality v0.0.0-20240712055506-48f0b2d5ed6d/go.mod h1:dm4y/1QwzjGaK17ofi0Vs6NpKAHegZky8qk6J2JJZAE=
-github.com/xtls/xray-core v1.8.25-0.20241228135723-93f72db9fd21 h1:M3siam8/XyzuI26tVHfVHdi49KL74E7QKe2D7Y+BQPg=
-github.com/xtls/xray-core v1.8.25-0.20241228135723-93f72db9fd21/go.mod h1:uyF9dD2FQO4+GAquZztVHC4RZ5HW5TD26KmMJvoHuBs=
+github.com/xtls/xray-core v1.8.25-0.20241231121203-4be32e99b289 h1:QC6Zg5Kfrs1oHiBSxGhF5t68J5EJ34UiuzaO4UqEj0I=
+github.com/xtls/xray-core v1.8.25-0.20241231121203-4be32e99b289/go.mod h1:uyF9dD2FQO4+GAquZztVHC4RZ5HW5TD26KmMJvoHuBs=
 github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0 h1:6fRhSjgLCkTD3JnJxvaJ4Sj+TYblw757bqYgZaOq5ZY=
 github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0/go.mod h1:/LWChgwKmvncFJFHJ7Gvn9wZArjbV5/FppcK2fKk/tI=
 github.com/yandex-cloud/go-genproto v0.0.0-20240311082839-58e1a7554a75 h1:hkFRBcSOFUNuuORzA5DqvBcoFjH7R0HCIu+mlSSw56U=
