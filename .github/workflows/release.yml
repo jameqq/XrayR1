@@ -91,7 +91,8 @@ jobs:
           # END Other architectures
       fail-fast: false
 
-    runs-on: ubuntu-latest
+#    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       GOOS: ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
