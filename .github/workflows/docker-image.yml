@@ -1,0 +1,25 @@
+# Dockerfile.build
+FROM golang:1.22-bullseye AS builder
+WORKDIR /src
+
+# clone is optional — typically you'll mount source; below we assume copying
+# Copy the repo into container
+COPY . .
+
+# Ensure go.mod references desired xray-core; optional check
+# RUN sed -i 's|github.com/xtls/xray-core v.*|github.com/xtls/xray-core v25.9.11|' go.mod
+RUN go mod tidy
+
+# Build for linux/amd64
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -trimpath -ldflags "-s -w" -o /out/XrayR
+
+# Build for linux/arm64 (optional)
+# ENV CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+# RUN go build -trimpath -ldflags "-s -w" -o /out/XrayR-arm64
+
+FROM debian:bullseye-slim AS release
+WORKDIR /out
+COPY --from=builder /out/XrayR /out/XrayR
+# set entrypoint not required for binary artifact
+CMD ["/out/XrayR"]
