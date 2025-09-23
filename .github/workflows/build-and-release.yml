@@ -1,0 +1,135 @@
+name: Build & Release XrayR (with xray-core v25.9.11)
+
+# 触发：当 push tag 或手动触发（测试用）
+on:
+  push:
+    tags:
+      - 'v*'              # 只有 push tag 才会触发 release 流程
+  workflow_dispatch:     # 手动触发（方便测试）
+
+# 需要写权限以便创建 Release & upload assets
+permissions:
+  contents: write
+
+concurrency:
+  group: xrayr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XRAY_CORE_VERSION: v25.9.11
+  OUTPUT_DIR: artifacts
+
+jobs:
+  build:
+    name: Build for ${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]    # 要哪些架构在这里加/删
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Ensure xray-core version in go.mod (non-committal)
+        run: |
+          # 替换 go.mod 中的 xray-core 版本（仅在工作区修改，不会 push）
+          sed -E -i 's|github.com/xtls/xray-core[[:space:]]+v[0-9]+\.[0-9]+\.[0-9]+.*|github.com/xtls/xray-core $XRAY_CORE_VERSION|' go.mod || true
+          cat go.mod | sed -n '1,120p'  # 简短输出以便 log 查看
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Go mod tidy
+        run: go mod tidy
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p $OUTPUT_DIR
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o XrayR-linux-amd64 .
+            BIN=XrayR-linux-amd64
+            TARNAME=XrayR-linux-amd64-${XRAY_CORE_VERSION}.tar.gz
+          else
+            GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o XrayR-linux-arm64 .
+            BIN=XrayR-linux-arm64
+            TARNAME=XrayR-linux-arm64-${XRAY_CORE_VERSION}.tar.gz
+          fi
+          # 生成 checksum 与打包
+          sha256sum $BIN | awk '{print $1}' > $BIN.sha256
+          tar -czvf ${TARNAME} $BIN $BIN.sha256
+          mkdir -p $OUTPUT_DIR/${{ matrix.goarch }}
+          mv ${TARNAME} $OUTPUT_DIR/${{ matrix.goarch }}/
+          mv $BIN $OUTPUT_DIR/${{ matrix.goarch }}/
+          mv $BIN.sha256 $OUTPUT_DIR/${{ matrix.goarch }}/
+          ls -al $OUTPUT_DIR/${{ matrix.goarch }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.goarch }}
+          path: $OUTPUT_DIR/${{ matrix.goarch }}/
+
+  release:
+    name: Create Release & Upload Assets
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded_artifacts
+
+      - name: Show downloaded files
+        run: |
+          find downloaded_artifacts -maxdepth 3 -type f -print
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Automated build including xray-core ${XRAY_CORE_VERSION}.
+            Artifacts built for: amd64, arm64.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # upload every file under downloaded_artifacts
+          UPLOAD_URL=${{ steps.create_release.outputs.upload_url }}
+          echo "upload_url: $UPLOAD_URL"
+          for f in $(find downloaded_artifacts -type f); do
+            fname=$(basename "$f")
+            echo "Uploading $fname ..."
+            # GitHub Release upload endpoint requires ?name=... param
+            curl --fail -sSL \
+              -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "$UPLOAD_URL?name=$fname"
+          done
+
+      - name: Done
+        run: echo "Release created: ${{ github.ref_name }} and assets uploaded."
