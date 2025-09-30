@@ -330,12 +330,23 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		ctx = session.ContextWithContent(ctx, content)
 	}
 	sniffingRequest := content.SniffingRequest
+
+	timeoutReader, ok := outbound.Reader.(buf.TimeoutReader)
+	if !ok {
+		if wrapper, wrapped := outbound.Reader.(*buf.TimeoutWrapperReader); wrapped {
+			timeoutReader = wrapper
+		} else {
+			wrapper := &buf.TimeoutWrapperReader{Reader: outbound.Reader}
+			outbound.Reader = wrapper
+			timeoutReader = wrapper
+		}
+	}
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
 		go func() {
 			cReader := &cachedReader{
-				reader: outbound.Reader.(buf.TimeoutReader),
+				reader: timeoutReader,
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
