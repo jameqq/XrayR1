@@ -5,6 +5,7 @@ package mydispatcher
 import (
 	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"sync"
@@ -14,7 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
-	"github.com/xtls/xray-core/common/net"
+	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
@@ -33,82 +34,210 @@ import (
 
 var errSniffingTimeout = newError("timeout on sniffing")
 
-type readDeadlineSetter interface {
-	SetReadDeadline(time.Time) error
+type timeoutReader interface {
+	buf.Reader
+	ReadMultiBufferTimeout(context.Context, time.Duration) (buf.MultiBuffer, error)
+}
+
+type timeoutWriter interface {
+	buf.Writer
+	WriteMultiBufferTimeout(context.Context, buf.MultiBuffer, time.Duration) error
 }
 
 type deadlineReader struct {
-	buf.Reader
-	deadline readDeadlineSetter
+	r buf.Reader
+	c net.Conn
 }
 
-func (r *deadlineReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
-	if timeout <= 0 {
-		return r.Reader.ReadMultiBuffer()
-	}
-	if err := r.deadline.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = r.deadline.SetReadDeadline(time.Time{})
-	}()
-	mb, err := r.Reader.ReadMultiBuffer()
-	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			if mb != nil && !mb.IsEmpty() {
-				buf.ReleaseMulti(mb)
-			}
-			return nil, buf.ErrReadTimeout
-		}
-		return nil, err
-	}
-	return mb, nil
+func (d deadlineReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	return d.r.ReadMultiBuffer()
 }
 
-func ensureTimeoutReader(reader buf.Reader) buf.TimeoutReader {
-	if timeoutReader, ok := reader.(buf.TimeoutReader); ok {
-		return timeoutReader
-	}
-	if setter, ok := findReadDeadlineSetter(reader); ok {
-		return &deadlineReader{
-			Reader:   reader,
-			deadline: setter,
+func (d deadlineReader) ReadMultiBufferTimeout(ctx context.Context, dur time.Duration) (buf.MultiBuffer, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 	}
-	return &buf.TimeoutWrapperReader{Reader: reader}
+	if dur > 0 && d.c != nil {
+		_ = d.c.SetReadDeadline(time.Now().Add(dur))
+		defer d.c.SetReadDeadline(time.Time{})
+	}
+	return d.r.ReadMultiBuffer()
 }
 
-func findReadDeadlineSetter(reader buf.Reader) (readDeadlineSetter, bool) {
-	if setter, ok := any(reader).(readDeadlineSetter); ok {
-		return setter, true
-	}
-	if br, ok := reader.(*buf.BufferedReader); ok {
-		return findReadDeadlineSetter(br.Reader)
-	}
-	if cr, ok := reader.(*cachedReader); ok {
-		return findReadDeadlineSetter(cr.reader)
-	}
-	if twr, ok := reader.(*buf.TimeoutWrapperReader); ok {
-		return findReadDeadlineSetter(twr.Reader)
-	}
-	return nil, false
+type deadlineWriter struct {
+	w buf.Writer
+	c net.Conn
 }
 
-func closeLinkWriter(writer interface{}) {
-	if closer, ok := writer.(interface{ CloseWrite() error }); ok {
-		_ = closer.CloseWrite()
+func (d deadlineWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	return d.w.WriteMultiBuffer(mb)
+}
+
+func (d deadlineWriter) WriteMultiBufferTimeout(ctx context.Context, mb buf.MultiBuffer, dur time.Duration) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
-	common.Close(writer)
+	if dur > 0 && d.c != nil {
+		_ = d.c.SetWriteDeadline(time.Now().Add(dur))
+		defer d.c.SetWriteDeadline(time.Time{})
+	}
+	return d.w.WriteMultiBuffer(mb)
+}
+
+type nativeTimeoutReader struct {
+	buf.TimeoutReader
+}
+
+func (n nativeTimeoutReader) ReadMultiBufferTimeout(ctx context.Context, dur time.Duration) (buf.MultiBuffer, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return n.TimeoutReader.ReadMultiBufferTimeout(dur)
+}
+
+type nativeTimeoutWriter interface {
+	WriteMultiBufferTimeout(buf.MultiBuffer, time.Duration) error
+}
+
+type legacyTimeoutWriter struct {
+	buf.Writer
+	inner nativeTimeoutWriter
+}
+
+func (l legacyTimeoutWriter) WriteMultiBufferTimeout(ctx context.Context, mb buf.MultiBuffer, dur time.Duration) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return l.inner.WriteMultiBufferTimeout(mb, dur)
+}
+
+type connExtractor interface {
+	Conn() net.Conn
+}
+
+type rawConnExtractor interface {
+	RawConn() net.Conn
+}
+
+type netConnExtractor interface {
+	NetConn() net.Conn
+}
+
+type underlyingConnExtractor interface {
+	UnderlyingConn() net.Conn
 }
 
 type cachedReader struct {
 	sync.Mutex
-	reader buf.TimeoutReader // *pipe.Reader or *buf.TimeoutWrapperReader
+	reader timeoutReader
 	cache  buf.MultiBuffer
 }
 
-func (r *cachedReader) Cache(b *buf.Buffer, deadline time.Duration) error {
-	mb, err := r.reader.ReadMultiBufferTimeout(deadline)
+func extractNetConnFromLink(link *transport.Link) net.Conn {
+	if link == nil {
+		return nil
+	}
+	if conn := extractNetConn(link.Reader); conn != nil {
+		return conn
+	}
+	if conn := extractNetConn(link.Writer); conn != nil {
+		return conn
+	}
+	return nil
+}
+
+func extractNetConn(target interface{}) net.Conn {
+	switch v := target.(type) {
+	case connExtractor:
+		return v.Conn()
+	case rawConnExtractor:
+		return v.RawConn()
+	case netConnExtractor:
+		return v.NetConn()
+	case underlyingConnExtractor:
+		return v.UnderlyingConn()
+	case interface{ SystemConn() net.Conn }:
+		return v.SystemConn()
+	case interface{ AsConn() net.Conn }:
+		return v.AsConn()
+	case interface{ Conn() *net.TCPConn }:
+		return v.Conn()
+	case interface{ TCPConn() *net.TCPConn }:
+		return v.TCPConn()
+	default:
+		return nil
+	}
+}
+
+func selectTimeoutReader(ctx context.Context, link *transport.Link) timeoutReader {
+	if link == nil || link.Reader == nil {
+		return nil
+	}
+	switch r := link.Reader.(type) {
+	case timeoutReader:
+		errors.LogDebug(ctx, "vision: using native TimeoutReader/Writer")
+		return r
+	case buf.TimeoutReader:
+		errors.LogDebug(ctx, "vision: using native TimeoutReader/Writer")
+		return nativeTimeoutReader{TimeoutReader: r}
+	default:
+		conn := extractNetConnFromLink(link)
+		if conn != nil {
+			errors.LogDebug(ctx, "vision: using deadlineReader/Writer with net.Conn")
+		} else {
+			errors.LogDebug(ctx, "vision: using deadlineReader/Writer without net.Conn")
+		}
+		return deadlineReader{r: link.Reader, c: conn}
+	}
+}
+
+func selectTimeoutWriter(ctx context.Context, link *transport.Link) timeoutWriter {
+	if link == nil || link.Writer == nil {
+		return nil
+	}
+	switch w := link.Writer.(type) {
+	case timeoutWriter:
+		errors.LogDebug(ctx, "vision: using native TimeoutReader/Writer")
+		return w
+	case nativeTimeoutWriter:
+		errors.LogDebug(ctx, "vision: using native TimeoutReader/Writer")
+		return legacyTimeoutWriter{Writer: link.Writer, inner: w}
+	default:
+		conn := extractNetConnFromLink(link)
+		if conn != nil {
+			errors.LogDebug(ctx, "vision: using deadlineReader/Writer with net.Conn")
+		} else {
+			errors.LogDebug(ctx, "vision: using deadlineReader/Writer without net.Conn")
+		}
+		return deadlineWriter{w: link.Writer, c: conn}
+	}
+}
+
+func closeLinkWriter(link *transport.Link) {
+	if link == nil || link.Writer == nil {
+		return
+	}
+	if conn := extractNetConnFromLink(link); conn != nil {
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.CloseWrite()
+		}
+	}
+	if closer, ok := link.Writer.(interface{ CloseWrite() error }); ok {
+		_ = closer.CloseWrite()
+	}
+	common.Close(link.Writer)
+}
+
+func (r *cachedReader) Cache(ctx context.Context, b *buf.Buffer, deadline time.Duration) error {
+	mb, err := r.reader.ReadMultiBufferTimeout(ctx, deadline)
 	if err != nil {
 		return err
 	}
@@ -150,13 +279,13 @@ func (r *cachedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	return r.reader.ReadMultiBuffer()
 }
 
-func (r *cachedReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+func (r *cachedReader) ReadMultiBufferTimeout(ctx context.Context, timeout time.Duration) (buf.MultiBuffer, error) {
 	mb := r.readInternal()
 	if mb != nil {
 		return mb, nil
 	}
 
-	return r.reader.ReadMultiBufferTimeout(timeout)
+	return r.reader.ReadMultiBufferTimeout(ctx, timeout)
 }
 
 func (r *cachedReader) Interrupt() {
@@ -165,9 +294,7 @@ func (r *cachedReader) Interrupt() {
 		r.cache = buf.ReleaseMulti(r.cache)
 	}
 	r.Unlock()
-	if p, ok := r.reader.(*pipe.Reader); ok {
-		p.Interrupt()
-	}
+	common.Interrupt(r.reader)
 }
 
 // DefaultDispatcher is a default implementation of Dispatcher.
@@ -248,8 +375,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		bucket, ok, reject := d.Limiter.GetUserBucket(sessionInbound.Tag, user.Email, sessionInbound.Source.Address.IP().String())
 		if reject {
 			errors.LogWarning(ctx, "Devices reach the limit: ", user.Email)
-			closeLinkWriter(outboundLink.Writer)
-			closeLinkWriter(inboundLink.Writer)
+			closeLinkWriter(outboundLink)
+			closeLinkWriter(inboundLink)
 			common.Interrupt(outboundLink.Reader)
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, newError("Devices reach the limit: ", user.Email)
@@ -283,7 +410,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	return inboundLink, outboundLink, nil
 }
 
-func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination net.Destination) bool {
+func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination xnet.Destination) bool {
 	domain := result.Domain()
 	if domain == "" {
 		return false
@@ -328,7 +455,7 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 }
 
 // Dispatch implements routing.Dispatcher.
-func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destination) (*transport.Link, error) {
+func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination xnet.Destination) (*transport.Link, error) {
 	if !destination.IsValid() {
 		panic("Dispatcher: Invalid destination.")
 	}
@@ -351,13 +478,23 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	if err != nil {
 		return nil, err
 	}
+	readerWrapper := selectTimeoutReader(ctx, outbound)
+	if readerWrapper == nil {
+		readerWrapper = deadlineReader{
+			r: outbound.Reader,
+			c: extractNetConnFromLink(outbound),
+		}
+	}
+	outbound.Reader = readerWrapper
+	if writerWrapper := selectTimeoutWriter(ctx, outbound); writerWrapper != nil {
+		outbound.Writer = writerWrapper
+	}
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
-		go func() {
-			timeoutReader := ensureTimeoutReader(outbound.Reader)
+		go func(reader timeoutReader) {
 			cReader := &cachedReader{
-				reader: timeoutReader,
+				reader: reader,
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
@@ -367,7 +504,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 			if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
 				domain := result.Domain()
 				errors.LogInfo(ctx, "sniffed domain: ", domain)
-				destination.Address = net.ParseAddress(domain)
+				destination.Address = xnet.ParseAddress(domain)
 				if sniffingRequest.RouteOnly && result.Protocol() != "fakedns" {
 					ob.RouteTarget = destination
 				} else {
@@ -375,13 +512,13 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				}
 			}
 			d.routedDispatch(ctx, outbound, destination)
-		}()
+		}(readerWrapper)
 	}
 	return inbound, nil
 }
 
 // DispatchLink implements routing.Dispatcher.
-func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.Destination, outbound *transport.Link) error {
+func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination xnet.Destination, outbound *transport.Link) error {
 	if !destination.IsValid() {
 		return newError("Dispatcher: Invalid destination.")
 	}
@@ -400,14 +537,23 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	}
 	sniffingRequest := content.SniffingRequest
 
-	timeoutReader := ensureTimeoutReader(outbound.Reader)
-	outbound.Reader = timeoutReader
+	readerWrapper := selectTimeoutReader(ctx, outbound)
+	if readerWrapper == nil {
+		readerWrapper = deadlineReader{
+			r: outbound.Reader,
+			c: extractNetConnFromLink(outbound),
+		}
+	}
+	outbound.Reader = readerWrapper
+	if writerWrapper := selectTimeoutWriter(ctx, outbound); writerWrapper != nil {
+		outbound.Writer = writerWrapper
+	}
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
-		go func() {
+		go func(reader timeoutReader) {
 			cReader := &cachedReader{
-				reader: timeoutReader,
+				reader: reader,
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
@@ -417,7 +563,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
 				domain := result.Domain()
 				errors.LogInfo(ctx, "sniffed domain: ", domain)
-				destination.Address = net.ParseAddress(domain)
+				destination.Address = xnet.ParseAddress(domain)
 				if sniffingRequest.RouteOnly && result.Protocol() != "fakedns" {
 					ob.RouteTarget = destination
 				} else {
@@ -425,13 +571,13 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 				}
 			}
 			d.routedDispatch(ctx, outbound, destination)
-		}()
+		}(readerWrapper)
 	}
 
 	return nil
 }
 
-func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, network net.Network) (SniffResult, error) {
+func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, network xnet.Network) (SniffResult, error) {
 	payload := buf.NewWithSize(32767)
 	defer payload.Release()
 
@@ -452,7 +598,7 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 				return nil, ctx.Err()
 			default:
 				cachingStartingTimeStamp := time.Now()
-				if err := cReader.Cache(payload, cacheDeadline); err != nil {
+				if err := cReader.Cache(ctx, payload, cacheDeadline); err != nil {
 					return nil, err
 				}
 				cachingTimeElapsed := time.Since(cachingStartingTimeStamp)
@@ -486,7 +632,7 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	return contentResult, contentErr
 }
 
-func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
+func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination xnet.Destination) {
 	var handler outbound.Handler
 
 	// Check if domain and protocol hit the rule
@@ -496,7 +642,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		if d.RuleManager.Detect(sessionInbound.Tag, destination.String(), sessionInbound.User.Email) {
 			errors.LogError(ctx, fmt.Sprintf("User %s access %s reject by rule", sessionInbound.User.Email, destination.String()))
 			newError("destination is reject by rule")
-			closeLinkWriter(link.Writer)
+			closeLinkWriter(link)
 			common.Interrupt(link.Reader)
 			return
 		}
@@ -513,7 +659,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			handler = h
 		} else {
 			errors.LogError(ctx, "non existing tag for platform initialized detour: ", forcedOutboundTag)
-			closeLinkWriter(link.Writer)
+			closeLinkWriter(link)
 			common.Interrupt(link.Reader)
 			return
 		}
@@ -543,7 +689,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 
 	if handler == nil {
 		errors.LogInfo(ctx, "default outbound handler not exist")
-		closeLinkWriter(link.Writer)
+		closeLinkWriter(link)
 		common.Interrupt(link.Reader)
 		return
 	}
