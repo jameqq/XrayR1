@@ -703,8 +703,14 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 
 	dispatchCtx := ctx
 	if settings := handler.ProxySettings(); settings != nil && settings.Type == freedomProxyConfigType {
-		baseCtx := context.WithoutCancel(ctx)
-		dispatchCtx, dcancel := context.WithTimeout(baseCtx, 10*time.Second)
+		base := context.Background()
+		if outbounds := session.OutboundsFromContext(ctx); outbounds != nil {
+			base = session.ContextWithOutbounds(base, outbounds)
+		}
+		if content := session.ContentFromContext(ctx); content != nil {
+			base = session.ContextWithContent(base, content)
+		}
+		dispatchCtx, dcancel := context.WithTimeout(base, 10*time.Second)
 		defer dcancel()
 		errors.LogDebug(dispatchCtx, "vision: freedom dispatch start")
 		defer errors.LogDebug(dispatchCtx, "vision: freedom dispatch done")
