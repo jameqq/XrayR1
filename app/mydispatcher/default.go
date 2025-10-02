@@ -33,6 +33,74 @@ import (
 
 var errSniffingTimeout = newError("timeout on sniffing")
 
+type readDeadlineSetter interface {
+	SetReadDeadline(time.Time) error
+}
+
+type deadlineReader struct {
+	buf.Reader
+	deadline readDeadlineSetter
+}
+
+func (r *deadlineReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+	if timeout <= 0 {
+		return r.Reader.ReadMultiBuffer()
+	}
+	if err := r.deadline.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = r.deadline.SetReadDeadline(time.Time{})
+	}()
+	mb, err := r.Reader.ReadMultiBuffer()
+	if err != nil {
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			if mb != nil && !mb.IsEmpty() {
+				buf.ReleaseMulti(mb)
+			}
+			return nil, buf.ErrReadTimeout
+		}
+		return nil, err
+	}
+	return mb, nil
+}
+
+func ensureTimeoutReader(reader buf.Reader) buf.TimeoutReader {
+	if timeoutReader, ok := reader.(buf.TimeoutReader); ok {
+		return timeoutReader
+	}
+	if setter, ok := findReadDeadlineSetter(reader); ok {
+		return &deadlineReader{
+			Reader:   reader,
+			deadline: setter,
+		}
+	}
+	return &buf.TimeoutWrapperReader{Reader: reader}
+}
+
+func findReadDeadlineSetter(reader buf.Reader) (readDeadlineSetter, bool) {
+	if setter, ok := any(reader).(readDeadlineSetter); ok {
+		return setter, true
+	}
+	if br, ok := reader.(*buf.BufferedReader); ok {
+		return findReadDeadlineSetter(br.Reader)
+	}
+	if cr, ok := reader.(*cachedReader); ok {
+		return findReadDeadlineSetter(cr.reader)
+	}
+	if twr, ok := reader.(*buf.TimeoutWrapperReader); ok {
+		return findReadDeadlineSetter(twr.Reader)
+	}
+	return nil, false
+}
+
+func closeLinkWriter(writer interface{}) {
+	if closer, ok := writer.(interface{ CloseWrite() error }); ok {
+		_ = closer.CloseWrite()
+	}
+	common.Close(writer)
+}
+
 type cachedReader struct {
 	sync.Mutex
 	reader buf.TimeoutReader // *pipe.Reader or *buf.TimeoutWrapperReader
@@ -180,8 +248,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		bucket, ok, reject := d.Limiter.GetUserBucket(sessionInbound.Tag, user.Email, sessionInbound.Source.Address.IP().String())
 		if reject {
 			errors.LogWarning(ctx, "Devices reach the limit: ", user.Email)
-			common.Close(outboundLink.Writer)
-			common.Close(inboundLink.Writer)
+			closeLinkWriter(outboundLink.Writer)
+			closeLinkWriter(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, newError("Devices reach the limit: ", user.Email)
@@ -287,8 +355,9 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
 		go func() {
+			timeoutReader := ensureTimeoutReader(outbound.Reader)
 			cReader := &cachedReader{
-				reader: outbound.Reader.(buf.TimeoutReader),
+				reader: timeoutReader,
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
@@ -331,16 +400,8 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	}
 	sniffingRequest := content.SniffingRequest
 
-	timeoutReader, ok := outbound.Reader.(buf.TimeoutReader)
-	if !ok {
-		if wrapper, wrapped := outbound.Reader.(*buf.TimeoutWrapperReader); wrapped {
-			timeoutReader = wrapper
-		} else {
-			wrapper := &buf.TimeoutWrapperReader{Reader: outbound.Reader}
-			outbound.Reader = wrapper
-			timeoutReader = wrapper
-		}
-	}
+	timeoutReader := ensureTimeoutReader(outbound.Reader)
+	outbound.Reader = timeoutReader
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
@@ -435,7 +496,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		if d.RuleManager.Detect(sessionInbound.Tag, destination.String(), sessionInbound.User.Email) {
 			errors.LogError(ctx, fmt.Sprintf("User %s access %s reject by rule", sessionInbound.User.Email, destination.String()))
 			newError("destination is reject by rule")
-			common.Close(link.Writer)
+			closeLinkWriter(link.Writer)
 			common.Interrupt(link.Reader)
 			return
 		}
@@ -452,7 +513,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			handler = h
 		} else {
 			errors.LogError(ctx, "non existing tag for platform initialized detour: ", forcedOutboundTag)
-			common.Close(link.Writer)
+			closeLinkWriter(link.Writer)
 			common.Interrupt(link.Reader)
 			return
 		}
@@ -482,7 +543,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 
 	if handler == nil {
 		errors.LogInfo(ctx, "default outbound handler not exist")
-		common.Close(link.Writer)
+		closeLinkWriter(link.Writer)
 		common.Interrupt(link.Reader)
 		return
 	}
