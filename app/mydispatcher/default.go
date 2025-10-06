@@ -38,6 +38,10 @@ type cachedReader struct {
 	cache  buf.MultiBuffer
 }
 
+type hostsLookup interface {
+	LookupHosts(string) *net.Address
+}
+
 func (r *cachedReader) Cache(b *buf.Buffer) {
 	mb, _ := r.reader.ReadMultiBufferTimeout(time.Millisecond * 100)
 	r.Lock()
@@ -383,21 +387,21 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 }
 
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
-	//outbounds := session.OutboundsFromContext(ctx)
-	//ob := outbounds[len(outbounds)-1]
-
-	//if hosts, ok := d.dns.(dns.HostsLookup); ok && destination.Address.Family().IsDomain() {
-	//	proxied := hosts.LookupHosts(ob.Target.String())
-	//	if proxied != nil {
-	//		ro := ob.RouteTarget == destination
-	//		destination.Address = *proxied
-	//		if ro {
-	//			ob.RouteTarget = destination
-	//		} else {
-	//			ob.Target = destination
-	//		}
-	//	}
-	//}
+	if hosts, ok := d.dns.(hostsLookup); ok && destination.Address.Family().IsDomain() {
+		if outbounds := session.OutboundsFromContext(ctx); len(outbounds) > 0 {
+			ob := outbounds[len(outbounds)-1]
+			proxied := hosts.LookupHosts(ob.Target.String())
+			if proxied != nil {
+				ro := ob.RouteTarget == destination
+				destination.Address = *proxied
+				if ro {
+					ob.RouteTarget = destination
+				} else {
+					ob.Target = destination
+				}
+			}
+		}
+	}
 
 	var handler outbound.Handler
 
