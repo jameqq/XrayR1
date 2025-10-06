@@ -1,7 +1,6 @@
-module github.com/XrayR-project/XrayR
+module github.com/jameqq/XrayR1
 
 go 1.25
-
 require (
 	dario.cat/mergo v1.0.0
 	github.com/bitly/go-simplejson v0.5.1
