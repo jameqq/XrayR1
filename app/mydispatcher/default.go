@@ -5,6 +5,7 @@ package mydispatcher
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +35,7 @@ var errSniffingTimeout = newError("timeout on sniffing")
 
 type cachedReader struct {
 	sync.Mutex
-	reader *pipe.Reader
+	reader buf.TimeoutReader
 	cache  buf.MultiBuffer
 }
 
@@ -42,17 +43,21 @@ type hostsLookup interface {
 	LookupHosts(string) *net.Address
 }
 
-func (r *cachedReader) Cache(b *buf.Buffer) {
-	mb, _ := r.reader.ReadMultiBufferTimeout(time.Millisecond * 100)
+func (r *cachedReader) Cache(b *buf.Buffer, deadline time.Duration) error {
+	mb, err := r.reader.ReadMultiBufferTimeout(deadline)
+	if err != nil {
+		return err
+	}
 	r.Lock()
 	if !mb.IsEmpty() {
 		r.cache, _ = buf.MergeMulti(r.cache, mb)
 	}
 	b.Clear()
-	rawBytes := b.Extend(buf.Size)
+	rawBytes := b.Extend(min(r.cache.Len(), b.Cap()))
 	n := r.cache.Copy(rawBytes)
 	b.Resize(0, int32(n))
 	r.Unlock()
+	return nil
 }
 
 func (r *cachedReader) readInternal() buf.MultiBuffer {
@@ -92,7 +97,9 @@ func (r *cachedReader) Interrupt() {
 		r.cache = buf.ReleaseMulti(r.cache)
 	}
 	r.Unlock()
-	r.reader.Interrupt()
+	if p, ok := r.reader.(*pipe.Reader); ok {
+		p.Interrupt()
+	}
 }
 
 // DefaultDispatcher is a default implementation of Dispatcher.
@@ -171,7 +178,6 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	}
 
 	if user != nil && len(user.Email) > 0 {
-		// Speed Limit and Device Limit
 		bucket, ok, reject := d.Limiter.GetUserBucket(sessionInbound.Tag, user.Email, sessionInbound.Source.Address.IP().String())
 		if reject {
 			errors.LogWarning(ctx, "Devices reach the limit: ", user.Email)
@@ -205,15 +211,75 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 				}
 			}
 		}
+		if p.Stats.UserOnline {
+			name := "user>>>" + user.Email + ">>>online"
+			if om, _ := stats.GetOrRegisterOnlineMap(d.stats, name); om != nil {
+				userIP := sessionInbound.Source.Address.String()
+				om.AddIP(userIP)
+			}
+		}
 	}
 
 	return inboundLink, outboundLink, nil
 }
 
+func (d *DefaultDispatcher) WrapLink(ctx context.Context, link *transport.Link) *transport.Link {
+	sessionInbound := session.InboundFromContext(ctx)
+	var user *protocol.MemoryUser
+	if sessionInbound != nil {
+		user = sessionInbound.User
+	}
+
+	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
+
+	if user != nil && len(user.Email) > 0 {
+		p := d.policy.ForLevel(user.Level)
+		if p.Stats.UserUplink {
+			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
+			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
+				if wrapper, ok := link.Reader.(*buf.TimeoutWrapperReader); ok {
+					wrapper.Counter = c
+				}
+			}
+		}
+		if p.Stats.UserDownlink {
+			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
+			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
+				link.Writer = &SizeStatWriter{
+					Counter: c,
+					Writer:  link.Writer,
+				}
+			}
+		}
+		if p.Stats.UserOnline {
+			name := "user>>>" + user.Email + ">>>online"
+			if om, _ := stats.GetOrRegisterOnlineMap(d.stats, name); om != nil {
+				userIP := sessionInbound.Source.Address.String()
+				om.AddIP(userIP)
+			}
+		}
+	}
+
+	return link
+}
+
 func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination net.Destination) bool {
 	domain := result.Domain()
-	for _, d := range request.ExcludeForDomain {
-		if strings.ToLower(domain) == d {
+	if domain == "" {
+		return false
+	}
+	for _, ex := range request.ExcludeForDomain {
+		if strings.HasPrefix(ex, "regexp:") {
+			pattern := ex[7:]
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				errors.LogInfo(ctx, "Unable to compile regex")
+				continue
+			}
+			if re.MatchString(domain) {
+				return false
+			}
+		} else if strings.ToLower(domain) == ex {
 			return false
 		}
 	}
@@ -280,7 +346,15 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				domain := result.Domain()
 				errors.LogInfo(ctx, "sniffed domain: ", domain)
 				destination.Address = net.ParseAddress(domain)
-				if sniffingRequest.RouteOnly && result.Protocol() != "fakedns" {
+				protocolName := result.Protocol()
+				if resComp, ok := result.(SnifferResultComposite); ok {
+					protocolName = resComp.ProtocolForDomainResult()
+				}
+				isFakeIP := false
+				if fkr0, ok := d.fdns.(dns.FakeDNSEngineRev0); ok && fkr0.IsIPInIPPool(ob.Target.Address) {
+					isFakeIP = true
+				}
+				if sniffingRequest.RouteOnly && protocolName != "fakedns" && protocolName != "fakedns+others" && !isFakeIP {
 					ob.RouteTarget = destination
 				} else {
 					ob.Target = destination
@@ -310,38 +384,45 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		content = new(session.Content)
 		ctx = session.ContextWithContent(ctx, content)
 	}
+	outbound = d.WrapLink(ctx, outbound)
 	sniffingRequest := content.SniffingRequest
 	if !sniffingRequest.Enabled {
-		go d.routedDispatch(ctx, outbound, destination)
+		d.routedDispatch(ctx, outbound, destination)
 	} else {
-		go func() {
-			cReader := &cachedReader{
-				reader: outbound.Reader.(*pipe.Reader),
+		cReader := &cachedReader{
+			reader: outbound.Reader.(buf.TimeoutReader),
+		}
+		outbound.Reader = cReader
+		result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
+		if err == nil {
+			content.Protocol = result.Protocol()
+		}
+		if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
+			domain := result.Domain()
+			errors.LogInfo(ctx, "sniffed domain: ", domain)
+			destination.Address = net.ParseAddress(domain)
+			protocolName := result.Protocol()
+			if resComp, ok := result.(SnifferResultComposite); ok {
+				protocolName = resComp.ProtocolForDomainResult()
 			}
-			outbound.Reader = cReader
-			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
-			if err == nil {
-				content.Protocol = result.Protocol()
+			isFakeIP := false
+			if fkr0, ok := d.fdns.(dns.FakeDNSEngineRev0); ok && fkr0.IsIPInIPPool(ob.Target.Address) {
+				isFakeIP = true
 			}
-			if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
-				domain := result.Domain()
-				errors.LogInfo(ctx, "sniffed domain: ", domain)
-				destination.Address = net.ParseAddress(domain)
-				if sniffingRequest.RouteOnly && result.Protocol() != "fakedns" {
-					ob.RouteTarget = destination
-				} else {
-					ob.Target = destination
-				}
+			if sniffingRequest.RouteOnly && protocolName != "fakedns" && protocolName != "fakedns+others" && !isFakeIP {
+				ob.RouteTarget = destination
+			} else {
+				ob.Target = destination
 			}
-			d.routedDispatch(ctx, outbound, destination)
-		}()
+		}
+		d.routedDispatch(ctx, outbound, destination)
 	}
 
 	return nil
 }
 
 func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, network net.Network) (SniffResult, error) {
-	payload := buf.New()
+	payload := buf.NewWithSize(32767)
 	defer payload.Release()
 
 	sniffer := NewSniffer(ctx)
@@ -353,26 +434,35 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	}
 
 	contentResult, contentErr := func() (SniffResult, error) {
+		cacheDeadline := 200 * time.Millisecond
 		totalAttempt := 0
 		for {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			default:
-				totalAttempt++
-				if totalAttempt > 2 {
-					return nil, errSniffingTimeout
+				cachingStartingTimeStamp := time.Now()
+				if err := cReader.Cache(payload, cacheDeadline); err != nil {
+					return nil, err
 				}
+				cachingTimeElapsed := time.Since(cachingStartingTimeStamp)
+				cacheDeadline -= cachingTimeElapsed
 
-				cReader.Cache(payload)
 				if !payload.IsEmpty() {
 					result, err := sniffer.Sniff(ctx, payload.Bytes(), network)
-					if err != common.ErrNoClue {
+					switch err {
+					case common.ErrNoClue:
+						totalAttempt++
+					case protocol.ErrProtoNeedMoreData:
+						return nil, err
+					default:
 						return result, err
 					}
+				} else {
+					totalAttempt++
 				}
-				if payload.IsFull() {
-					return nil, errUnknownContent
+				if totalAttempt >= 2 || cacheDeadline <= 0 {
+					return nil, errSniffingTimeout
 				}
 			}
 		}
@@ -387,18 +477,21 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 }
 
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
+	outbounds := session.OutboundsFromContext(ctx)
+	if len(outbounds) == 0 {
+		outbounds = []*session.Outbound{{}}
+		ctx = session.ContextWithOutbounds(ctx, outbounds)
+	}
+	ob := outbounds[len(outbounds)-1]
+
 	if hosts, ok := d.dns.(hostsLookup); ok && destination.Address.Family().IsDomain() {
-		if outbounds := session.OutboundsFromContext(ctx); len(outbounds) > 0 {
-			ob := outbounds[len(outbounds)-1]
-			proxied := hosts.LookupHosts(ob.Target.String())
-			if proxied != nil {
-				ro := ob.RouteTarget == destination
-				destination.Address = *proxied
-				if ro {
-					ob.RouteTarget = destination
-				} else {
-					ob.Target = destination
-				}
+		if proxied := hosts.LookupHosts(ob.Target.String()); proxied != nil {
+			ro := ob.RouteTarget == destination
+			destination.Address = *proxied
+			if ro {
+				ob.RouteTarget = destination
+			} else {
+				ob.Target = destination
 			}
 		}
 	}
@@ -438,7 +531,11 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			outTag := route.GetOutboundTag()
 			if h := d.ohm.GetHandler(outTag); h != nil {
 				isPickRoute = 2
-				errors.LogInfo(ctx, "taking detour [", outTag, "] for [", destination, "]")
+				if route.GetRuleTag() == "" {
+					errors.LogInfo(ctx, "taking detour [", outTag, "] for [", destination, "]")
+				} else {
+					errors.LogInfo(ctx, "Hit route rule: [", route.GetRuleTag(), "] so taking detour [", outTag, "] for [", destination, "]")
+				}
 				handler = h
 			} else {
 				errors.LogWarning(ctx, "non existing outTag: ", outTag)
@@ -464,6 +561,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		return
 	}
 
+	ob.Tag = handler.Tag()
 	if accessMessage := log.AccessMessageFromContext(ctx); accessMessage != nil {
 		if tag := handler.Tag(); tag != "" {
 			if inTag == "" {
