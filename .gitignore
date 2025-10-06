@@ -18,3 +18,5 @@ error.log
 .lego
 cert
 config.yml
+.tmp/
+
