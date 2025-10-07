@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,21 +58,6 @@ func structToMap(v interface{}) (map[string]any, error) {
 	}
 	if len(result) == 0 {
 		return nil, nil
-	}
-	return result, nil
-}
-
-func typedMessageToMap(msg *serial.TypedMessage) (map[string]any, error) {
-	if msg == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
 	}
 	return result, nil
 }
@@ -190,8 +176,6 @@ func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
 
 	if panelConfig.Stats != nil {
 		final["stats"] = panelConfig.Stats
-	} else {
-		final["stats"] = map[string]any{}
 	}
 
 	if panelConfig.Policy != nil {
@@ -238,28 +222,6 @@ func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
 		final["outbounds"] = outbounds
 	}
 
-	appMessages := []*serial.TypedMessage{
-		serial.ToTypedMessage(coreLogConfig.Build()),
-		serial.ToTypedMessage(&mydispatcher.Config{}),
-		serial.ToTypedMessage(&stats.Config{}),
-		serial.ToTypedMessage(&proxyman.InboundConfig{}),
-		serial.ToTypedMessage(&proxyman.OutboundConfig{}),
-	}
-	apps := make([]map[string]any, 0, len(appMessages))
-	for _, msg := range appMessages {
-		if msg == nil {
-			continue
-		}
-		appMap, err := typedMessageToMap(msg)
-		if err != nil {
-			return nil, err
-		}
-		apps = append(apps, appMap)
-	}
-	if len(apps) > 0 {
-		final["app"] = apps
-	}
-
 	return final, nil
 }
 
@@ -279,8 +241,22 @@ func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
 	if err != nil {
 		log.Panicf("failed to marshal core config: %s", err)
 	}
-	server, err := core.StartInstance("json", configBytes)
+	cfgObj, err := core.LoadConfig("json", bytes.NewReader(configBytes))
 	if err != nil {
+		log.Panicf("failed to load core config: %s", err)
+	}
+	requiredApps := []*serial.TypedMessage{
+		serial.ToTypedMessage(&mydispatcher.Config{}),
+		serial.ToTypedMessage(&stats.Config{}),
+		serial.ToTypedMessage(&proxyman.InboundConfig{}),
+		serial.ToTypedMessage(&proxyman.OutboundConfig{}),
+	}
+	cfgObj.App = append(requiredApps, cfgObj.App...)
+	server, err := core.New(cfgObj)
+	if err != nil {
+		log.Panicf("failed to create instance: %s", err)
+	}
+	if err := server.Start(); err != nil {
 		log.Panicf("failed to start instance: %s", err)
 	}
 	return server

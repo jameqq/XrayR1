@@ -59,18 +59,4 @@ func TestBuildCoreConfigMapWithApiStatsPolicy(t *testing.T) {
 		t.Fatalf("expected StatsUserDownlink true, got %v", level0["StatsUserDownlink"])
 	}
 
-	apps, ok := final["app"].([]map[string]any)
-	if !ok {
-		t.Fatalf("expected app slice in final config")
-	}
-	foundDispatcher := false
-	for _, app := range apps {
-		if appType, _ := app["type"].(string); appType == "xrayr.app.mydispatcher.Config" {
-			foundDispatcher = true
-			break
-		}
-	}
-	if !foundDispatcher {
-		t.Fatalf("expected mydispatcher app in final config")
-	}
 }
