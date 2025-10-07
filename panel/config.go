@@ -13,6 +13,9 @@ type Config struct {
 	RouteConfigPath    string            `mapstructure:"RouteConfigPath"`
 	ConnectionConfig   *ConnectionConfig `mapstructure:"ConnectionConfig"`
 	NodesConfig        []*NodesConfig    `mapstructure:"Nodes"`
+	Api                map[string]any    `mapstructure:"Api"`
+	Stats              map[string]any    `mapstructure:"Stats"`
+	Policy             map[string]any    `mapstructure:"Policy"`
 }
 
 type NodesConfig struct {

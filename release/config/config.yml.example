@@ -12,6 +12,16 @@ ConnectionConfig:
   UplinkOnly: 2 # Time limit when the connection downstream is closed, Second
   DownlinkOnly: 4 # Time limit when the connection is closed after the uplink is closed, Second
   BufferSize: 64 # The internal cache size of each connection, kB
+Api:
+  Tag: api
+  Services:
+    - StatsService
+Stats: {}
+Policy:
+  Levels:
+    "0":
+      StatsUserUplink: true
+      StatsUserDownlink: true
 Nodes:
   - PanelType: "SSpanel" # Panel type: SSpanel, NewV2board, PMpanel, Proxypanel, V2RaySocks, GoV2Panel, BunPanel
     ApiConfig:

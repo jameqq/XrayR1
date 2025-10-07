@@ -2,6 +2,7 @@ package panel
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 
@@ -42,7 +43,56 @@ func New(panelConfig *Config) *Panel {
 	return p
 }
 
-func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
+func structToMap(v interface{}) (map[string]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
+}
+
+func typedMessageToMap(msg *serial.TypedMessage) (map[string]any, error) {
+	if msg == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func sliceStructsToMaps[T any](items []T) ([]map[string]any, error) {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		data, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, nil
+}
+
+func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
 	// Log Config
 	coreLogConfig := &conf.LogConfig{}
 	logConfig := getDefaultLogConfig()
@@ -72,89 +122,167 @@ func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
 	// 	config.ControllerConfig.DNSConfig = coreDnsConfig
 	// }
 
-	dnsConfig, err := coreDnsConfig.Build()
-	if err != nil {
-		log.Panicf("Failed to understand DNS config, Please check: https://xtls.github.io/config/dns.html for help: %s", err)
+	if _, err := coreDnsConfig.Build(); err != nil {
+		return nil, fmt.Errorf("failed to understand DNS config: %w", err)
 	}
 
 	// Routing config
 	coreRouterConfig := &conf.RouterConfig{}
 	if panelConfig.RouteConfigPath != "" {
 		if data, err := os.ReadFile(panelConfig.RouteConfigPath); err != nil {
-			log.Panicf("Failed to read Routing config file at: %s", panelConfig.RouteConfigPath)
+			return nil, fmt.Errorf("failed to read routing config file %s: %w", panelConfig.RouteConfigPath, err)
 		} else {
 			if err = json.Unmarshal(data, coreRouterConfig); err != nil {
-				log.Panicf("Failed to unmarshal Routing config: %s", panelConfig.RouteConfigPath)
+				return nil, fmt.Errorf("failed to unmarshal routing config %s: %w", panelConfig.RouteConfigPath, err)
 			}
 		}
 	}
-	routeConfig, err := coreRouterConfig.Build()
-	if err != nil {
-		log.Panicf("Failed to understand Routing config  Please check: https://xtls.github.io/config/routing.html for help: %s", err)
+	if _, err := coreRouterConfig.Build(); err != nil {
+		return nil, fmt.Errorf("failed to understand routing config: %w", err)
 	}
 	// Custom Inbound config
 	var coreCustomInboundConfig []conf.InboundDetourConfig
 	if panelConfig.InboundConfigPath != "" {
 		if data, err := os.ReadFile(panelConfig.InboundConfigPath); err != nil {
-			log.Panicf("Failed to read Custom Inbound config file at: %s", panelConfig.OutboundConfigPath)
+			return nil, fmt.Errorf("failed to read custom inbound config file %s: %w", panelConfig.InboundConfigPath, err)
 		} else {
 			if err = json.Unmarshal(data, &coreCustomInboundConfig); err != nil {
-				log.Panicf("Failed to unmarshal Custom Inbound config: %s", panelConfig.OutboundConfigPath)
+				return nil, fmt.Errorf("failed to unmarshal custom inbound config %s: %w", panelConfig.InboundConfigPath, err)
 			}
 		}
 	}
-	var inBoundConfig []*core.InboundHandlerConfig
+	// Validate inbound configs
 	for _, config := range coreCustomInboundConfig {
-		oc, err := config.Build()
-		if err != nil {
-			log.Panicf("Failed to understand Inbound config, Please check: https://xtls.github.io/config/inbound.html for help: %s", err)
+		if _, err := config.Build(); err != nil {
+			return nil, fmt.Errorf("failed to understand inbound config: %w", err)
 		}
-		inBoundConfig = append(inBoundConfig, oc)
 	}
-	// Custom Outbound config
 	var coreCustomOutboundConfig []conf.OutboundDetourConfig
 	if panelConfig.OutboundConfigPath != "" {
 		if data, err := os.ReadFile(panelConfig.OutboundConfigPath); err != nil {
-			log.Panicf("Failed to read Custom Outbound config file at: %s", panelConfig.OutboundConfigPath)
+			return nil, fmt.Errorf("failed to read custom outbound config file %s: %w", panelConfig.OutboundConfigPath, err)
 		} else {
 			if err = json.Unmarshal(data, &coreCustomOutboundConfig); err != nil {
-				log.Panicf("Failed to unmarshal Custom Outbound config: %s", panelConfig.OutboundConfigPath)
+				return nil, fmt.Errorf("failed to unmarshal custom outbound config %s: %w", panelConfig.OutboundConfigPath, err)
 			}
 		}
 	}
-	var outBoundConfig []*core.OutboundHandlerConfig
 	for _, config := range coreCustomOutboundConfig {
-		oc, err := config.Build()
-		if err != nil {
-			log.Panicf("Failed to understand Outbound config, Please check: https://xtls.github.io/config/outbound.html for help: %s", err)
+		if _, err := config.Build(); err != nil {
+			return nil, fmt.Errorf("failed to understand outbound config: %w", err)
 		}
-		outBoundConfig = append(outBoundConfig, oc)
 	}
 	// Policy config
 	levelPolicyConfig := parseConnectionConfig(panelConfig.ConnectionConfig)
 	corePolicyConfig := &conf.PolicyConfig{}
 	corePolicyConfig.Levels = map[uint32]*conf.Policy{0: levelPolicyConfig}
-	policyConfig, _ := corePolicyConfig.Build()
-	// Build Core Config
-	config := &core.Config{
-		App: []*serial.TypedMessage{
-			serial.ToTypedMessage(coreLogConfig.Build()),
-			serial.ToTypedMessage(&mydispatcher.Config{}),
-			serial.ToTypedMessage(&stats.Config{}),
-			serial.ToTypedMessage(&proxyman.InboundConfig{}),
-			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
-			serial.ToTypedMessage(policyConfig),
-			serial.ToTypedMessage(dnsConfig),
-			serial.ToTypedMessage(routeConfig),
-		},
-		Inbound:  inBoundConfig,
-		Outbound: outBoundConfig,
-	}
-	server, err := core.New(config)
-	if err != nil {
-		log.Panicf("failed to create instance: %s", err)
+	if _, err := corePolicyConfig.Build(); err != nil {
+		return nil, fmt.Errorf("failed to understand policy config: %w", err)
 	}
 
+	final := make(map[string]any)
+
+	if logMap, err := structToMap(coreLogConfig); err != nil {
+		return nil, err
+	} else if logMap != nil {
+		final["log"] = logMap
+	}
+
+	if panelConfig.Stats != nil {
+		final["stats"] = panelConfig.Stats
+	} else {
+		final["stats"] = map[string]any{}
+	}
+
+	if panelConfig.Policy != nil {
+		final["policy"] = panelConfig.Policy
+	} else if policyMap, err := structToMap(corePolicyConfig); err != nil {
+		return nil, err
+	} else if policyMap != nil {
+		final["policy"] = policyMap
+	}
+
+	if panelConfig.Api != nil {
+		final["api"] = panelConfig.Api
+	}
+
+	if dnsMap, err := structToMap(coreDnsConfig); err != nil {
+		return nil, err
+	} else if dnsMap != nil {
+		final["dns"] = dnsMap
+	}
+
+	if routeMap, err := structToMap(coreRouterConfig); err != nil {
+		return nil, err
+	} else if routeMap != nil {
+		final["routing"] = routeMap
+	}
+
+	inbounds, err := sliceStructsToMaps(coreCustomInboundConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(inbounds) == 0 {
+		final["inbounds"] = []map[string]any{}
+	} else {
+		final["inbounds"] = inbounds
+	}
+
+	outbounds, err := sliceStructsToMaps(coreCustomOutboundConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(outbounds) == 0 {
+		final["outbounds"] = []map[string]any{}
+	} else {
+		final["outbounds"] = outbounds
+	}
+
+	appMessages := []*serial.TypedMessage{
+		serial.ToTypedMessage(coreLogConfig.Build()),
+		serial.ToTypedMessage(&mydispatcher.Config{}),
+		serial.ToTypedMessage(&stats.Config{}),
+		serial.ToTypedMessage(&proxyman.InboundConfig{}),
+		serial.ToTypedMessage(&proxyman.OutboundConfig{}),
+	}
+	apps := make([]map[string]any, 0, len(appMessages))
+	for _, msg := range appMessages {
+		if msg == nil {
+			continue
+		}
+		appMap, err := typedMessageToMap(msg)
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, appMap)
+	}
+	if len(apps) > 0 {
+		final["app"] = apps
+	}
+
+	return final, nil
+}
+
+func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
+	finalConfig, err := buildCoreConfigMap(panelConfig)
+	if err != nil {
+		log.Panicf("failed to build core config: %s", err)
+	}
+	if panelConfig.Api != nil {
+		if tag, ok := panelConfig.Api["Tag"].(string); ok && tag != "" {
+			log.Infof("Injecting API config with tag %s", tag)
+		} else {
+			log.Info("Injecting API config")
+		}
+	}
+	configBytes, err := json.Marshal(finalConfig)
+	if err != nil {
+		log.Panicf("failed to marshal core config: %s", err)
+	}
+	server, err := core.StartInstance("json", configBytes)
+	if err != nil {
+		log.Panicf("failed to start instance: %s", err)
+	}
 	return server
 }
 
@@ -165,9 +293,6 @@ func (p *Panel) Start() {
 	log.Print("Start the panel..")
 	// Load Core
 	server := p.loadCore(p.panelConfig)
-	if err := server.Start(); err != nil {
-		log.Panicf("Failed to start instance: %s", err)
-	}
 	p.Server = server
 
 	// Load Nodes config
