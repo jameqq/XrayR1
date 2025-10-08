@@ -76,6 +76,7 @@ func run() error {
 		return fmt.Errorf("Parse config file %v failed: %s \n", cfgFile, err)
 	}
 	applyPassthroughDefaults(config, panelConfig)
+	applyLogrusLevel(panelConfig)
 
 	if panelConfig.LogConfig.Level == "debug" {
 		log.SetReportCaller(true)
@@ -95,6 +96,7 @@ func run() error {
 				log.Panicf("Parse config file %v failed: %s \n", cfgFile, err)
 			}
 			applyPassthroughDefaults(config, panelConfig)
+			applyLogrusLevel(panelConfig)
 
 			if panelConfig.LogConfig.Level == "debug" {
 				log.SetReportCaller(true)
@@ -127,6 +129,30 @@ func applyPassthroughDefaults(v *viper.Viper, cfg *panel.Config) {
 	}
 	if v.IsSet("Policy") && cfg.Policy == nil {
 		cfg.Policy = map[string]any{}
+	}
+}
+
+func applyLogrusLevel(cfg *panel.Config) {
+	level := ""
+	if cfg.LogConfig != nil {
+		level = strings.ToLower(cfg.LogConfig.Level)
+	}
+	switch level {
+	case "debug":
+		log.SetLevel(log.DebugLevel)
+		log.SetReportCaller(true)
+	case "info":
+		log.SetLevel(log.InfoLevel)
+		log.SetReportCaller(false)
+	case "error":
+		log.SetLevel(log.ErrorLevel)
+		log.SetReportCaller(false)
+	case "none":
+		log.SetLevel(log.PanicLevel)
+		log.SetReportCaller(false)
+	default:
+		log.SetLevel(log.WarnLevel)
+		log.SetReportCaller(false)
 	}
 }
 
