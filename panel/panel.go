@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"dario.cat/mergo"
@@ -230,13 +231,32 @@ func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
 	if err != nil {
 		log.Panicf("failed to build core config: %s", err)
 	}
-	if panelConfig.Api != nil {
-		if tag, ok := panelConfig.Api["Tag"].(string); ok && tag != "" {
-			log.Infof("Injecting API config with tag %s", tag)
+
+	if api, ok := finalConfig["api"].(map[string]any); ok {
+		if tag, _ := api["tag"].(string); tag != "" {
+			log.Infof("Injecting API config (tag=%s, services=%v)", tag, api["services"])
 		} else {
-			log.Info("Injecting API config")
+			log.Infof("Injecting API config (services=%v)", api["services"])
 		}
 	}
+
+	if _, ok := finalConfig["stats"]; ok {
+		log.Info("Injecting Stats config")
+	}
+
+	if pol, ok := finalConfig["policy"].(map[string]any); ok {
+		if lv, ok := pol["levels"].(map[string]any); ok {
+			keys := make([]string, 0, len(lv))
+			for k := range lv {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			log.Infof("Injecting Policy config (levels=%v)", keys)
+		} else {
+			log.Info("Injecting Policy config (no levels)")
+		}
+	}
+
 	configBytes, err := json.Marshal(finalConfig)
 	if err != nil {
 		log.Panicf("failed to marshal core config: %s", err)

@@ -75,6 +75,7 @@ func run() error {
 	if err := config.Unmarshal(panelConfig); err != nil {
 		return fmt.Errorf("Parse config file %v failed: %s \n", cfgFile, err)
 	}
+	applyPassthroughDefaults(config, panelConfig)
 
 	if panelConfig.LogConfig.Level == "debug" {
 		log.SetReportCaller(true)
@@ -93,6 +94,7 @@ func run() error {
 			if err := config.Unmarshal(panelConfig); err != nil {
 				log.Panicf("Parse config file %v failed: %s \n", cfgFile, err)
 			}
+			applyPassthroughDefaults(config, panelConfig)
 
 			if panelConfig.LogConfig.Level == "debug" {
 				log.SetReportCaller(true)
@@ -114,6 +116,18 @@ func run() error {
 	<-osSignals
 
 	return nil
+}
+
+func applyPassthroughDefaults(v *viper.Viper, cfg *panel.Config) {
+	if v.IsSet("Api") && cfg.Api == nil {
+		cfg.Api = map[string]any{}
+	}
+	if v.IsSet("Stats") && cfg.Stats == nil {
+		cfg.Stats = map[string]any{}
+	}
+	if v.IsSet("Policy") && cfg.Policy == nil {
+		cfg.Policy = map[string]any{}
+	}
 }
 
 func Execute() error {
