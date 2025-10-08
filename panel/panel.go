@@ -200,6 +200,7 @@ func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
 	if routeMap, err := structToMap(coreRouterConfig); err != nil {
 		return nil, err
 	} else if routeMap != nil {
+		log.Debugf("Routing rules: %v", routeMap["rules"])
 		final["routing"] = routeMap
 	}
 
