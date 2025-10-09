@@ -16,6 +16,7 @@ type Config struct {
 	Api                map[string]any    `mapstructure:"Api"`
 	Stats              map[string]any    `mapstructure:"Stats"`
 	Policy             map[string]any    `mapstructure:"Policy"`
+	Metrics            map[string]any    `mapstructure:"Metrics"`
 }
 
 type NodesConfig struct {

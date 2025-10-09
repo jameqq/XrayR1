@@ -17,6 +17,10 @@ func TestBuildCoreConfigMapWithApiStatsPolicy(t *testing.T) {
 				},
 			},
 		},
+		Metrics: map[string]any{
+			"Tag":    "Metrics",
+			"Listen": "127.0.0.1:11111",
+		},
 	}
 
 	final, err := buildCoreConfigMap(cfg)
@@ -57,6 +61,20 @@ func TestBuildCoreConfigMapWithApiStatsPolicy(t *testing.T) {
 	}
 	if downlink, _ := level0["StatsUserDownlink"].(bool); !downlink {
 		t.Fatalf("expected StatsUserDownlink true, got %v", level0["StatsUserDownlink"])
+	}
+
+	metricsVal, ok := final["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metrics map in final config")
+	}
+	if tag, _ := metricsVal["tag"].(string); tag != "Metrics" {
+		t.Fatalf("unexpected metrics tag: %v", tag)
+	}
+	if listen, _ := metricsVal["listen"].(string); listen != "127.0.0.1:11111" {
+		t.Fatalf("unexpected metrics listen: %v", listen)
+	}
+	if len(metricsVal) != 2 {
+		t.Fatalf("expected only tag and listen in metrics, got %v", metricsVal)
 	}
 
 }

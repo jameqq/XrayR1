@@ -17,6 +17,9 @@ Api:
   Services:
     - StatsService
 Stats: {}
+Metrics:
+  tag: Metrics
+  listen: 127.0.0.1:11111
 Policy:
   Levels:
     "0":

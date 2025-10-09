@@ -130,6 +130,9 @@ func applyPassthroughDefaults(v *viper.Viper, cfg *panel.Config) {
 	if v.IsSet("Policy") && cfg.Policy == nil {
 		cfg.Policy = map[string]any{}
 	}
+	if v.IsSet("Metrics") && cfg.Metrics == nil {
+		cfg.Metrics = map[string]any{}
+	}
 }
 
 func applyLogrusLevel(cfg *panel.Config) {

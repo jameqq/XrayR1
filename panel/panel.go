@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"dario.cat/mergo"
@@ -77,6 +78,22 @@ func sliceStructsToMaps[T any](items []T) ([]map[string]any, error) {
 		result = append(result, m)
 	}
 	return result, nil
+}
+
+func normalizeMetricsConfig(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	normalized := make(map[string]any, 2)
+	for key, value := range src {
+		switch strings.ToLower(key) {
+		case "tag":
+			normalized["tag"] = value
+		case "listen":
+			normalized["listen"] = value
+		}
+	}
+	return normalized
 }
 
 func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
@@ -191,6 +208,10 @@ func buildCoreConfigMap(panelConfig *Config) (map[string]any, error) {
 		final["api"] = panelConfig.Api
 	}
 
+	if panelConfig.Metrics != nil {
+		final["metrics"] = normalizeMetricsConfig(panelConfig.Metrics)
+	}
+
 	if dnsMap, err := structToMap(coreDnsConfig); err != nil {
 		return nil, err
 	} else if dnsMap != nil {
@@ -243,6 +264,16 @@ func (p *Panel) loadCore(panelConfig *Config) *core.Instance {
 
 	if _, ok := finalConfig["stats"]; ok {
 		log.Info("Injecting Stats config")
+	}
+
+	if metrics, ok := finalConfig["metrics"].(map[string]any); ok {
+		if listen, _ := metrics["listen"].(string); listen != "" {
+			log.Infof("Injecting Metrics config (listen=%s)", listen)
+		} else if tag, _ := metrics["tag"].(string); tag != "" {
+			log.Infof("Injecting Metrics config (tag=%s)", tag)
+		} else {
+			log.Info("Injecting Metrics config")
+		}
 	}
 
 	if pol, ok := finalConfig["policy"].(map[string]any); ok {
