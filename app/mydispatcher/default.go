@@ -166,6 +166,7 @@ if sessionInbound != nil {
 // 禁用 splice，避免 Vision 绕过统计
 sessionInbound.CanSpliceCopy = 3
 user = sessionInbound.User
+}
 
 	if user != nil && len(user.Email) > 0 {
 		// Speed Limit and Device Limit
